@@ -552,7 +552,14 @@ export async function renderChunk(
       const presetFormat: "mp4" | "mov" | "webm" = isPngSequence
         ? "mp4"
         : (plan.dimensions.format as "mp4" | "mov");
-      const preset = getEncoderPreset(job.config.quality, presetFormat, undefined);
+      const basePreset = getEncoderPreset(job.config.quality, presetFormat, undefined);
+      // Override the preset's codec from the planDir's locked encoder so
+      // h265 mp4 chunks call libx265 instead of getEncoderPreset's default
+      // h264. `getEncoderPreset` only returns h265 in HDR paths today;
+      // distributed mode is SDR-only, so the override here is the
+      // canonical way for chunks to honor `DistributedRenderConfig.codec`.
+      const preset: typeof basePreset =
+        encoder.encoder === "libx265-software" ? { ...basePreset, codec: "h265" } : basePreset;
       const effectiveQuality = encoder.crf ?? preset.quality;
       const effectiveBitrate = encoder.crf != null ? undefined : encoder.bitrate;
       // For non-pngseq, encodeStage writes to `outputPath` when `isPngSequence`

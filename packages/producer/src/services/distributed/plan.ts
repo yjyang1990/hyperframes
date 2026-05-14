@@ -80,6 +80,17 @@ export interface DistributedRenderConfig {
    * supports both.
    */
   format: "mp4" | "mov" | "png-sequence";
+  /**
+   * Codec selection for `format: "mp4"`. `"h264"` (the default) → libx264 +
+   * yuv420p; `"h265"` → libx265 + yuv420p with closed-GOP keyint params
+   * (`min-keyint=N:scenecut=0:open-gop=0:repeat-headers=1`) so chunked
+   * concat-copy round-trips losslessly the same way h264 does. Ignored for
+   * `format: "mov"` (always ProRes 4444) and `format: "png-sequence"`
+   * (no encoder). Passing `codec` with a non-mp4 format throws at plan
+   * time so caller errors surface immediately rather than producing a
+   * silently-wrong planDir.
+   */
+  codec?: "h264" | "h265";
   quality?: "draft" | "standard" | "high";
   /** Constant-rate-factor override; mutually exclusive with `bitrate`. */
   crf?: number;
@@ -425,7 +436,7 @@ function buildLockedRenderConfig(input: {
   runtimeEnv: Record<string, string>;
 }): LockedRenderConfig {
   const { config, forceScreenshot, deviceScaleFactor, ffmpegVersion } = input;
-  const { encoder, pixelFormat, preset } = FORMAT_ENCODER_TABLE[config.format];
+  const { encoder, pixelFormat, preset } = resolveEncoderTriple(config);
   return {
     captureMode: forceScreenshot ? "screenshot" : "beginframe",
     forceScreenshot,
@@ -455,18 +466,39 @@ function buildLockedRenderConfig(input: {
 }
 
 /**
- * Per-format encoder + pixel-format + preset triple. Distributed mode is
- * SDR-only: H.264 8-bit for mp4, ProRes 4444 for mov, raw RGBA for
- * png-sequence.
+ * Resolve the encoder + pixel-format + preset triple for a distributed
+ * render. Distributed mode is SDR-only: H.264 or H.265 8-bit for mp4,
+ * ProRes 4444 for mov, raw RGBA for png-sequence.
+ *
+ * `config.codec` is consulted only when `config.format === "mp4"`. Passing
+ * `codec` with a non-mp4 format throws at plan time — surfaces the
+ * caller error immediately rather than producing a silently-wrong planDir
+ * whose chunk worker would override the codec choice.
  */
-const FORMAT_ENCODER_TABLE: Record<
-  DistributedRenderConfig["format"],
-  { encoder: LockedRenderConfig["encoder"]; pixelFormat: string; preset: string }
-> = {
-  mp4: { encoder: "libx264-software", pixelFormat: "yuv420p", preset: "medium" },
-  mov: { encoder: "prores-software", pixelFormat: "yuva444p10le", preset: "4444" },
-  "png-sequence": { encoder: "png-sequence", pixelFormat: "rgba", preset: "lossless" },
-};
+function resolveEncoderTriple(config: DistributedRenderConfig): {
+  encoder: LockedRenderConfig["encoder"];
+  pixelFormat: string;
+  preset: string;
+} {
+  if (config.format === "mp4") {
+    const codec = config.codec ?? "h264";
+    if (codec === "h265") {
+      return { encoder: "libx265-software", pixelFormat: "yuv420p", preset: "medium" };
+    }
+    return { encoder: "libx264-software", pixelFormat: "yuv420p", preset: "medium" };
+  }
+  if (config.codec !== undefined) {
+    throw new Error(
+      `[plan] DistributedRenderConfig.codec is only valid for format="mp4"; received ` +
+        `codec=${JSON.stringify(config.codec)} with format=${JSON.stringify(config.format)}. ` +
+        `Omit codec for non-mp4 formats — mov is always ProRes 4444 and png-sequence has no encoder.`,
+    );
+  }
+  if (config.format === "mov") {
+    return { encoder: "prores-software", pixelFormat: "yuva444p10le", preset: "4444" };
+  }
+  return { encoder: "png-sequence", pixelFormat: "rgba", preset: "lossless" };
+}
 
 /**
  * Activity A of the distributed render pipeline. Produces a self-contained
