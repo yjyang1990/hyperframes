@@ -1,21 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef } from "react";
 import { useMountEffect } from "./useMountEffect";
 import {
   installStudioManualEditSeekReapply,
   reapplyPositionEditsAfterSeek,
   readStudioFileChangePath,
 } from "../components/editor/manualEdits";
-import {
-  STUDIO_MOTION_PATH,
-  applyStudioMotionManifest,
-  emptyStudioMotionManifest,
-  installStudioMotionSeekReapply,
-  isStudioMotionManifestPath,
-  parseStudioMotionManifest,
-  serializeStudioMotionManifest,
-  type StudioMotionManifest,
-} from "../components/editor/studioMotion";
-import { saveProjectFilesWithHistory } from "../utils/studioFileHistory";
+import { STUDIO_MOTION_PATH } from "../components/editor/studioMotion";
 import type { EditHistoryKind } from "../utils/editHistory";
 
 // ── Types ──
@@ -46,35 +36,24 @@ interface UseManifestPersistenceParams {
 
 export function useManifestPersistence({
   projectId,
-  showToast,
+  showToast: _showToast,
   readOptionalProjectFile: _readOptionalProjectFile,
-  writeProjectFile,
-  recordEdit,
+  writeProjectFile: _writeProjectFile,
+  recordEdit: _recordEdit,
   previewIframeRef,
-  activeCompPathRef,
+  activeCompPathRef: _activeCompPathRef,
   domEditSaveTimestampRef,
   reloadPreview,
 }: UseManifestPersistenceParams) {
-  void _readOptionalProjectFile;
+  void _showToast;
+  void _recordEdit;
+  void _activeCompPathRef;
 
-  const [, setStudioMotionRevision] = useState(0);
   const domTextCommitVersionRef = useRef(0);
   const domEditSaveQueueRef = useRef(Promise.resolve());
-  const studioMotionManifestRef = useRef<StudioMotionManifest>(emptyStudioMotionManifest());
-  const studioMotionRevisionRef = useRef(0);
   const applyStudioManualEditsToPreviewRef = useRef<
-    (
-      iframe?: HTMLIFrameElement | null,
-      options?: { forceFromDisk?: boolean; readFromDiskFirst?: boolean },
-    ) => Promise<void>
+    (iframe?: HTMLIFrameElement | null) => Promise<void>
   >(async () => {});
-  const applyStudioMotionToPreviewRef = useRef<
-    (
-      iframe?: HTMLIFrameElement | null,
-      options?: { forceFromDisk?: boolean; readFromDiskFirst?: boolean },
-    ) => Promise<void>
-  >(async () => {});
-  const motionBootstrappedRef = useRef(false);
 
   // Keep a ref to the latest projectId so async save callbacks always read the
   // current value, even when the callback was captured in a stale closure.
@@ -96,7 +75,8 @@ export function useManifestPersistence({
     await domEditSaveQueueRef.current.catch(() => undefined);
   }, []);
 
-  // ── Apply manual edits (HTML-baked — just install seek hooks) ──
+  // ── Apply manual edits (HTML-baked — install seek hooks) ──
+  // reapplyPositionEditsAfterSeek now also handles motion reapply from DOM attributes.
 
   const applyCurrentStudioManualEditsToPreview = useCallback(
     (iframe: HTMLIFrameElement | null = previewIframeRef.current) => {
@@ -143,199 +123,47 @@ export function useManifestPersistence({
   );
   applyStudioManualEditsToPreviewRef.current = applyStudioManualEditsToPreview;
 
-  // ── Apply motion ──
-
-  const applyCurrentStudioMotionToPreview = useCallback(
-    (iframe: HTMLIFrameElement | null = previewIframeRef.current) => {
-      if (!iframe) return;
-      let doc: Document | null = null;
-      try {
-        doc = iframe.contentDocument;
-      } catch {
-        return;
-      }
-      if (!doc) return;
-      const previewDoc = doc;
-
-      const applyManifest = () => {
-        applyStudioMotionManifest(
-          previewDoc,
-          studioMotionManifestRef.current,
-          activeCompPathRef.current,
-        );
-      };
-      const applyAndInstallSeekHooks = () => {
-        applyManifest();
-        if (iframe.contentWindow) {
-          installStudioMotionSeekReapply(iframe.contentWindow, applyManifest);
-        }
-      };
-
-      const win = iframe.contentWindow;
-      win?.requestAnimationFrame?.(applyAndInstallSeekHooks);
-      win?.setTimeout?.(applyAndInstallSeekHooks, 120);
-    },
-    [activeCompPathRef, previewIframeRef],
-  );
-
-  const applyStudioMotionToPreview = useCallback(
-    async (
-      iframe: HTMLIFrameElement | null = previewIframeRef.current,
-      options?: { forceFromDisk?: boolean; readFromDiskFirst?: boolean },
-    ) => {
-      const needsBootstrap = !motionBootstrappedRef.current;
-      if (needsBootstrap) motionBootstrappedRef.current = true;
-      const readFromDiskFirst = Boolean(
-        options?.forceFromDisk || options?.readFromDiskFirst || needsBootstrap,
-      );
-      if (!readFromDiskFirst) {
-        applyCurrentStudioMotionToPreview(iframe);
-        return;
-      }
-      const readRevision = studioMotionRevisionRef.current;
-      let content: string;
-      try {
-        content = await _readOptionalProjectFile(STUDIO_MOTION_PATH);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to read motion manifest";
-        showToast(message);
-        applyCurrentStudioMotionToPreview(iframe);
-        return;
-      }
-      if (options?.forceFromDisk || readRevision === studioMotionRevisionRef.current) {
-        studioMotionManifestRef.current = parseStudioMotionManifest(content);
-        if (options?.forceFromDisk) studioMotionRevisionRef.current += 1;
-        setStudioMotionRevision((revision) => revision + 1);
-      }
-      applyCurrentStudioMotionToPreview(iframe);
-    },
-    [applyCurrentStudioMotionToPreview, previewIframeRef, _readOptionalProjectFile, showToast],
-  );
-  applyStudioMotionToPreviewRef.current = applyStudioMotionToPreview;
-
-  // ── Optimistic motion commit ──
-
-  const commitStudioMotionManifestOptimistically = useCallback(
-    (
-      updateManifest: (manifest: StudioMotionManifest) => StudioMotionManifest,
-      options: { label: string; coalesceKey: string },
-    ) => {
-      const previousManifest = studioMotionManifestRef.current;
-      const nextManifest = updateManifest(previousManifest);
-      const previousContent = serializeStudioMotionManifest(previousManifest);
-      const nextContent = serializeStudioMotionManifest(nextManifest);
-      if (nextContent === previousContent) {
-        return;
-      }
-
-      const revision = studioMotionRevisionRef.current + 1;
-      studioMotionRevisionRef.current = revision;
-      studioMotionManifestRef.current = nextManifest;
-      setStudioMotionRevision((current) => current + 1);
-      applyCurrentStudioMotionToPreview(previewIframeRef.current);
-
-      const save = async () => {
-        const originalContent = await _readOptionalProjectFile(STUDIO_MOTION_PATH);
-        const diskManifest = parseStudioMotionManifest(originalContent);
-        const nextDiskManifest = updateManifest(diskManifest);
-        const nextDiskContent = serializeStudioMotionManifest(nextDiskManifest);
-        if (nextDiskContent === originalContent) {
-          return;
-        }
-
-        const pid = projectIdRef.current;
-        if (!pid) throw new Error("No active project");
-        domEditSaveTimestampRef.current = Date.now();
-        await saveProjectFilesWithHistory({
-          projectId: pid,
-          label: options.label,
-          kind: "motion",
-          coalesceKey: options.coalesceKey,
-          files: { [STUDIO_MOTION_PATH]: nextDiskContent },
-          readFile: async () => originalContent,
-          writeFile: writeProjectFile,
-          recordEdit,
-        });
-        domEditSaveTimestampRef.current = Date.now();
-
-        if (studioMotionRevisionRef.current === revision) {
-          studioMotionManifestRef.current = nextDiskManifest;
-          setStudioMotionRevision((current) => current + 1);
-          applyCurrentStudioMotionToPreview(previewIframeRef.current);
-        }
-      };
-
-      void queueDomEditSave(save).catch((error) => {
-        if (studioMotionRevisionRef.current === revision) {
-          studioMotionRevisionRef.current += 1;
-          studioMotionManifestRef.current = previousManifest;
-          setStudioMotionRevision((current) => current + 1);
-          applyCurrentStudioMotionToPreview(previewIframeRef.current);
-        }
-        const message = error instanceof Error ? error.message : "Failed to save motion edit";
-        showToast(message);
-      });
-    },
-    [
-      applyCurrentStudioMotionToPreview,
-      recordEdit,
-      queueDomEditSave,
-      _readOptionalProjectFile,
-      showToast,
-      writeProjectFile,
-      previewIframeRef,
-      domEditSaveTimestampRef,
-    ],
-  );
-
   // ── Sync preview after undo/redo ──
 
   const syncHistoryPreviewAfterApply = useCallback(
-    async (paths: string[] | undefined) => {
-      const changedPaths = paths ?? [];
-      const motionManifestOnly =
-        changedPaths.length > 0 && changedPaths.every((path) => path === STUDIO_MOTION_PATH);
-
-      if (motionManifestOnly) {
-        await applyStudioMotionToPreview(previewIframeRef.current, { forceFromDisk: true });
-        return;
-      }
-
-      // Reload via refreshKey so NLELayout saves seek position before the iframe reloads.
+    async (_paths: string[] | undefined) => {
+      // Motion data is now stored in HTML attributes — any undo/redo that touches HTML
+      // files triggers a full reload which picks up the changes automatically.
       reloadPreview();
     },
-    [applyStudioMotionToPreview, previewIframeRef, reloadPreview],
+    [reloadPreview],
   );
 
-  // ── Reset manifests when project changes ──
-
-  const projectTrackerRef = useRef<string | null>(projectId);
-
-  // eslint-disable-next-line no-restricted-syntax
-  useEffect(() => {
-    const previousProjectId = projectTrackerRef.current;
-    projectTrackerRef.current = projectId;
-    if (!previousProjectId || previousProjectId === projectId) return;
-    studioMotionManifestRef.current = emptyStudioMotionManifest();
-    studioMotionRevisionRef.current += 1;
-    setStudioMotionRevision((revision) => revision + 1);
-    motionBootstrappedRef.current = false;
-  }, [projectId]);
+  // ── Migrate legacy studio-motion.json ──
+  // Projects that used the old JSON-file approach may still have a populated
+  // `.hyperframes/studio-motion.json`. The studio no longer reads from it, but
+  // the legacy render-script injection in `preview.ts` / `vite.studioMotion.ts`
+  // could still fire alongside the new seek-reapply runtime. Empty the file so
+  // the legacy codepath no-ops.
+  useMountEffect(() => {
+    _readOptionalProjectFile(STUDIO_MOTION_PATH)
+      .then((content) => {
+        if (!content) return;
+        try {
+          const parsed = JSON.parse(content) as { motions?: unknown[] };
+          if (!Array.isArray(parsed.motions) || parsed.motions.length === 0) return;
+        } catch {
+          return;
+        }
+        return _writeProjectFile(STUDIO_MOTION_PATH, JSON.stringify({ version: 1, motions: [] }));
+      })
+      .catch(() => {
+        /* best-effort migration — ignore failures */
+      });
+  });
 
   // ── Listen for external file changes (HMR / SSE) ──
   useMountEffect(() => {
     const handler = (payload?: unknown) => {
       const changedPath = readStudioFileChangePath(payload);
+      if (!changedPath) return;
       const recentDomEditSave = Date.now() - domEditSaveTimestampRef.current < 1200;
-      if (isStudioMotionManifestPath(changedPath)) {
-        if (!recentDomEditSave) {
-          void applyStudioMotionToPreviewRef.current(previewIframeRef.current, {
-            forceFromDisk: true,
-          });
-        }
-        return;
-      }
-      // Non-motion external file change — reload unless it's an echo of our own save.
+      // External file change — reload unless it's an echo of our own save.
       if (!recentDomEditSave) {
         reloadPreview();
       }
@@ -353,17 +181,11 @@ export function useManifestPersistence({
   return {
     domTextCommitVersionRef,
     domEditSaveQueueRef,
-    studioMotionManifestRef,
-    studioMotionRevisionRef,
     applyStudioManualEditsToPreviewRef,
-    applyStudioMotionToPreviewRef,
     queueDomEditSave,
     waitForPendingDomEditSaves,
     applyCurrentStudioManualEditsToPreview,
     applyStudioManualEditsToPreview,
-    applyCurrentStudioMotionToPreview,
-    applyStudioMotionToPreview,
-    commitStudioMotionManifestOptimistically,
     syncHistoryPreviewAfterApply,
   };
 }
