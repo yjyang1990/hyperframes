@@ -372,12 +372,10 @@ function discoverTestSuites(
     if (!statSync(dir).isDirectory()) continue;
     if (entry === "node_modules" || entry.startsWith(".")) continue;
 
-    // `tests/distributed/<name>/` is the home for fixtures authored
-    // specifically for the distributed pipeline (see tests/README.md and
-    // DISTRIBUTED-RENDERING-PLAN.md §10.2). Recurse one level deeper so
-    // each `<name>` becomes a first-class fixture ID (`mp4-h264-sdr`,
-    // `mov-prores`, …) the user can target on the CLI without their
-    // namespace prefix.
+    // `tests/distributed/<name>/` holds fixtures authored for the
+    // distributed pipeline. Recurse one level deeper so each `<name>`
+    // becomes a first-class fixture ID the user can target on the CLI
+    // without a namespace prefix.
     if (entry === "distributed") {
       for (const sub of readdirSync(dir)) {
         const subDir = join(dir, sub);
@@ -547,9 +545,7 @@ function saveFailureDetails(
   snapshotHtml?: string,
 ): void {
   const failuresDir = join(suite.dir, "failures");
-  if (!existsSync(failuresDir)) {
-    mkdirSync(failuresDir, { recursive: true });
-  }
+  mkdirSync(failuresDir, { recursive: true });
 
   // Save compilation failures
   if (result.compilation && !result.compilation.passed) {
@@ -608,30 +604,36 @@ function saveFailureDetails(
     const framesToExtract = failedCheckpoints.slice(0, 10);
     if (framesToExtract.length > 0) {
       const framesDir = join(failuresDir, "frames");
-      if (!existsSync(framesDir)) {
-        mkdirSync(framesDir, { recursive: true });
-      }
+      mkdirSync(framesDir, { recursive: true });
 
       const renderedIsDir =
         existsSync(renderedVideoPath) && statSync(renderedVideoPath).isDirectory();
       logPretty(`Extracting ${framesToExtract.length} failed frames...`, "📸");
 
+      // For directory output, sort both frame lists once — they're static for
+      // the duration of the failure-extraction loop, so the per-checkpoint
+      // readdir+filter+sort the loop did before was wasted syscalls.
+      const renderedDirFrames = renderedIsDir
+        ? readdirSync(renderedVideoPath)
+            .filter((n) => n.toLowerCase().endsWith(".png"))
+            .sort()
+        : null;
+      const snapshotDirFrames = renderedIsDir
+        ? readdirSync(snapshotVideoPath)
+            .filter((n) => n.toLowerCase().endsWith(".png"))
+            .sort()
+        : null;
+
       for (const checkpoint of framesToExtract) {
         const timeStr = checkpoint.time.toFixed(2).replace(".", "_");
         try {
-          if (renderedIsDir) {
+          if (renderedDirFrames && snapshotDirFrames) {
             const frameIndex = Math.max(
               0,
               Math.round(checkpoint.time * fpsToNumber(suite.meta.renderConfig.fps)),
             );
-            const renderedFrames = readdirSync(renderedVideoPath)
-              .filter((n) => n.toLowerCase().endsWith(".png"))
-              .sort();
-            const snapshotFrames = readdirSync(snapshotVideoPath)
-              .filter((n) => n.toLowerCase().endsWith(".png"))
-              .sort();
-            const renderedFrame = renderedFrames[frameIndex];
-            const snapshotFrame = snapshotFrames[frameIndex];
+            const renderedFrame = renderedDirFrames[frameIndex];
+            const snapshotFrame = snapshotDirFrames[frameIndex];
             if (renderedFrame !== undefined) {
               copyFileSync(
                 join(renderedVideoPath, renderedFrame),
@@ -717,17 +719,22 @@ async function runTestSuite(
   const tempDownloadDir = join(tempRoot, "downloads");
   const outputFormat = suite.meta.renderConfig.format ?? "mp4";
   const isPngSequence = outputFormat === "png-sequence";
-  // png-sequence output is a directory; encoded video outputs (mp4/mov/webm)
-  // are single files. `outputSuffix` is appended to the in-temp + baseline
-  // names so both shapes round-trip cleanly.
-  const outputSuffix = isPngSequence
-    ? ""
-    : outputFormat === "mp4"
-      ? ".mp4"
-      : outputFormat === "mov"
-        ? ".mov"
-        : ".webm";
-  const outputBasename = isPngSequence ? "frames" : `output${outputSuffix}`;
+  // png-sequence output is a directory (basename = "frames"); encoded video
+  // formats produce a single file (basename = "output.<ext>"). One lookup
+  // covers both shapes for the in-temp render and the on-disk baseline.
+  // `VIDEO_EXT` is intentionally typed against only the encoded-video set —
+  // the `isPngSequence` ternary below short-circuits before `outputFormat`
+  // can be `"png-sequence"`, but TS can't narrow through that, so we
+  // assert the narrowing at the indexing site rather than over-widening
+  // the lookup table.
+  const VIDEO_EXT: Record<"mp4" | "mov" | "webm", string> = {
+    mp4: ".mp4",
+    mov: ".mov",
+    webm: ".webm",
+  };
+  const outputBasename = isPngSequence
+    ? "frames"
+    : `output${VIDEO_EXT[outputFormat as "mp4" | "mov" | "webm"]}`;
   const renderedOutputPath = join(tempRoot, outputBasename);
 
   // Snapshot files stored in test's output/ directory. For png-sequence the
@@ -882,10 +889,9 @@ async function runTestSuite(
       }
       if (isPngSequence) {
         // Frames directory — recursive copy so every PNG lands at
-        // `<snapshotDir>/frames/<frame-N>.png`.
-        if (existsSync(snapshotVideoPath)) {
-          rmSync(snapshotVideoPath, { recursive: true, force: true });
-        }
+        // `<snapshotDir>/frames/<frame-N>.png`. `rmSync(..., force: true)`
+        // tolerates a missing path, so the prior existsSync gate was redundant.
+        rmSync(snapshotVideoPath, { recursive: true, force: true });
         cpSync(renderedOutputPath, snapshotVideoPath, { recursive: true });
       } else {
         copyFileSync(renderedOutputPath, snapshotVideoPath);

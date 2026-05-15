@@ -153,38 +153,25 @@ export async function runDistributedSimulatedRender(
   mkdirSync(planDir, { recursive: true });
   mkdirSync(chunksDir, { recursive: true });
 
-  // Step A: plan. `codec` is only forwarded when the format actually
-  // accepts it — `plan()` throws if codec is set for a non-mp4 format,
-  // and a caller passing `format: "mov", codec: undefined` would still
-  // surface that field in the resulting object. We omit it conditionally
-  // to keep the off-path planDir identical to pre-codec-knob output.
+  // Step A: plan. `plan()` throws when `codec` is set with a non-mp4 format,
+  // but `codec: undefined` is a no-op — so we forward it directly for mp4
+  // and elide it for the others rather than branching the entire config.
+  // hdrMode is pinned to force-sdr so the harness's behavior is independent
+  // of any future auto-detect changes.
   const planResult = await plan(
     input.projectDir,
-    input.format === "mp4"
-      ? {
-          fps: input.fps,
-          width: 1920,
-          height: 1080,
-          format: "mp4",
-          codec: input.codec,
-          chunkSize: input.chunkSize,
-          maxParallelChunks: input.maxParallelChunks,
-          hdrMode: "force-sdr",
-        }
-      : {
-          fps: input.fps,
-          // Required-by-type but overridden by the composition's own attrs;
-          // see docstring above. Any positive integer works.
-          width: 1920,
-          height: 1080,
-          format: input.format,
-          chunkSize: input.chunkSize,
-          maxParallelChunks: input.maxParallelChunks,
-          // Force the SDR path explicitly — `auto` would still resolve to
-          // force-sdr in distributed mode, but pinning it here keeps the
-          // harness's behavior independent of any future auto-detect changes.
-          hdrMode: "force-sdr",
-        },
+    {
+      fps: input.fps,
+      // Required-by-type but overridden by the composition's `data-width` /
+      // `data-height` attrs; any positive integer works.
+      width: 1920,
+      height: 1080,
+      format: input.format,
+      ...(input.format === "mp4" && input.codec !== undefined ? { codec: input.codec } : {}),
+      chunkSize: input.chunkSize,
+      maxParallelChunks: input.maxParallelChunks,
+      hdrMode: "force-sdr",
+    },
     planDir,
   );
 

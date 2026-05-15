@@ -242,9 +242,8 @@ describe("plan() — codec knob", () => {
         readFileSync(join(planDir, "meta", "encoder.json"), "utf-8"),
       ) as Record<string, unknown>;
       expect(encoder.encoder).toBe("libx265-software");
-      // SDR 8-bit yuv420p, same as h264. Distributed mode is SDR-only —
-      // anyone reading this and tempted to bump to 10-bit, that's HDR
-      // territory and lives in v1.5.
+      // SDR 8-bit yuv420p, same as h264 — distributed mode is SDR-only and
+      // 10-bit / HDR pixelFormat selection is not exposed on this surface.
       expect(encoder.pixelFormat).toBe("yuv420p");
     },
     TIMEOUT_MS,
