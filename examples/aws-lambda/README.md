@@ -112,6 +112,65 @@ three actions. They reference fake S3 URIs — useful for sanity-checking
 the handler's dispatch logic; not for full end-to-end testing (real S3
 calls require credentials and a project zip to actually exist).
 
+## End-to-end smoke + benchmark
+
+For full end-to-end validation against real AWS — the gate that proves
+the architecture works on a deployed Lambda — use the local smoke
+script:
+
+```bash
+# All defaults (mp4-h264-sdr fixture, chunk counts 2/4/8, PSNR >= 40 dB).
+./scripts/smoke.sh
+
+# Customised:
+./scripts/smoke.sh \
+  --fixture mp4-h264-sdr \
+  --chunk-counts 2,4,8,16 \
+  --psnr-threshold 40 \
+  --reserved-concurrency 8
+
+# Keep the stack alive for inspection afterward:
+./scripts/smoke.sh --keep-stack
+
+# Show all flags including cost notes:
+./scripts/smoke.sh --help
+```
+
+The script builds the handler ZIP, deploys this template under a
+per-run stack name, renders the fixture at each chunk count via the
+Step Functions state machine, PSNR-compares against the in-process
+baseline (which is git-LFS tracked under
+`packages/producer/tests/distributed/<fixture>/output/`), captures
+per-execution Step Functions history, and tears the stack down.
+
+**Wall-clock methodology caveat (`eval.sh` only).** `eval.sh` reports a
+local-vs-Lambda "speedup" column. The local timing includes `bun` +
+`tsx` + harness scaffolding (not just renderer-internal time); the
+Lambda timing measures Step Functions execution only. This biases the
+speedup against Lambda on tiny fixtures and in favour of Lambda on
+larger ones. Treat the number as "end-to-end CLI experience," not as a
+renderer-vs-renderer benchmark. Cold-start variance is ±5-10s per
+chunk; run with `--iterations 3+` to report medians.
+
+**Cost per pass.** Each `eval.sh` invocation runs `SAM deploy` (~$0.01
+in CFN operations) plus N fixtures × ITERATIONS × CHUNK_COUNT Lambda
+invocations at `MemorySize` (default 10 GiB) × per-chunk wall clock.
+With defaults (4 fixtures, 1 iteration, chunk-count 4) the Lambda
+spend is roughly $0.10-$0.20 per pass before S3 transfer. Lower
+`--reserved-concurrency` for cost-conscious accounts; higher
+`--iterations` improves median stability at proportional cost.
+
+Outputs land under `<repo-root>/lambda-smoke-artifacts/`:
+
+- `results.json` — `chunkCount × wallClockMs × psnrAvgDb`
+- `renders/N<N>-output.mp4` — each rendered chunk count
+- `renders/N<N>-history.json` — full Step Functions execution history
+
+Prerequisites: `aws` (v2), `sam` (≥ 1.100), `bun` (≥ 1.3), `ffmpeg`,
+`jq`, `zip`. AWS credentials come from the standard resolution chain
+(env vars → `~/.aws/credentials` → SSO → IMDS). Pin a specific profile
+with `--profile <name>` or `AWS_PROFILE=<name>`.
+
 ## Parameters
 
 | Parameter                       | Default       | Notes                                                                                           |
