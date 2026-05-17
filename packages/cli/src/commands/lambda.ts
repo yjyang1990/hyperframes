@@ -28,6 +28,11 @@ export const examples: Example[] = [
     "hyperframes lambda sites create ./my-project",
   ],
   ["Tear the stack down", "hyperframes lambda destroy"],
+  ["Print the IAM policy the CLI needs", "hyperframes lambda policies user"],
+  [
+    "Validate a checked-in IAM policy still covers the CLI",
+    "hyperframes lambda policies validate ./infra/iam/hyperframes.json",
+  ],
 ];
 
 const HELP = `
@@ -41,6 +46,7 @@ ${c.bold("SUBCOMMANDS:")}
   ${c.accent("render")}            ${c.dim("Start a distributed render (returns a renderId)")}
   ${c.accent("progress")}          ${c.dim("Print progress + cost for an in-flight or finished render")}
   ${c.accent("destroy")}           ${c.dim("Tear the stack down (S3 bucket is retained)")}
+  ${c.accent("policies")}          ${c.dim("Print or validate the IAM permissions the CLI needs")}
 
 ${c.bold("FIRST RUN:")}
   ${c.accent("hyperframes lambda deploy")}
@@ -58,17 +64,18 @@ export default defineCommand({
     subcommand: {
       type: "positional",
       required: false,
-      description: "deploy | sites | render | progress | destroy",
+      description: "deploy | sites | render | progress | destroy | policies",
     },
     target: {
       type: "positional",
       required: false,
-      description: "Subcommand-specific positional (project dir, render id, etc.)",
+      description: "Subcommand-specific positional (project dir, render id, policies verb, etc.)",
     },
     extra: {
       type: "positional",
       required: false,
-      description: "Extra positional (e.g. `sites create <projectDir>`)",
+      description:
+        "Extra positional (e.g. `sites create <projectDir>` or `policies validate <policy.json>`)",
     },
 
     // Stack identity
@@ -255,6 +262,22 @@ export default defineCommand({
       case "destroy": {
         const { runDestroy } = await import("./lambda/destroy.js");
         await runDestroy({ stackName, awsProfile: args.profile as string | undefined });
+        return;
+      }
+      case "policies": {
+        const verb = args.target as string | undefined;
+        if (verb !== "role" && verb !== "user" && verb !== "validate") {
+          console.error(
+            `[lambda policies] usage: hyperframes lambda policies <role|user|validate> [args]`,
+          );
+          process.exit(1);
+        }
+        const { runPolicies } = await import("./lambda/policies.js");
+        await runPolicies({
+          verb,
+          inputPath: args.extra as string | undefined,
+          json: Boolean(args.json),
+        });
         return;
       }
       default:
