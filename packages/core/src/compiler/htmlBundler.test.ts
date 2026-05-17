@@ -801,4 +801,101 @@ describe("bundleToSingleHtml", () => {
     expect(bundled).toContain("@import url('https://fonts.googleapis.com/css2?family=Inter')");
     expect(bundled).toContain("margin: 0");
   });
+
+  it("rebases url() paths in @import-resolved CSS to project root", async () => {
+    const dir = makeTempProject({
+      "index.html": `<!doctype html>
+<html><body>
+  <link rel="stylesheet" href="styles/canvas.css">
+  <div data-composition-id="root" data-width="320" data-height="180"></div>
+  <script>window.__timelines = window.__timelines || {}; window.__timelines.root = {}</script>
+</body></html>`,
+      "styles/canvas.css": `@import url('./tokens.css');\nbody { margin: 0; }`,
+      "styles/tokens.css": `@font-face { src: url('assets/fonts/brand.woff2') format('woff2'); }`,
+      "styles/assets/fonts/brand.woff2": "fake-font-data",
+    });
+
+    const bundled = await bundleToSingleHtml(dir);
+
+    expect(bundled).toContain("url('styles/assets/fonts/brand.woff2')");
+    expect(bundled).not.toContain("url('assets/fonts/brand.woff2')");
+    expect(bundled).not.toContain("@import");
+  });
+
+  it("rebases url() paths in <link>-inlined CSS from subdirectories", async () => {
+    const dir = makeTempProject({
+      "index.html": `<!doctype html>
+<html><body>
+  <link rel="stylesheet" href="theme/styles.css">
+  <div data-composition-id="root" data-width="320" data-height="180"></div>
+  <script>window.__timelines = window.__timelines || {}; window.__timelines.root = {}</script>
+</body></html>`,
+      "theme/styles.css": `.bg { background: url('./images/grain.png'); }`,
+      "theme/images/grain.png": "fake-image-data",
+    });
+
+    const bundled = await bundleToSingleHtml(dir);
+
+    expect(bundled).toContain("url('theme/images/grain.png')");
+    expect(bundled).not.toContain("url('./images/grain.png')");
+  });
+
+  it("rebases url() paths with ../ traversal in nested @import", async () => {
+    const dir = makeTempProject({
+      "index.html": `<!doctype html>
+<html><body>
+  <link rel="stylesheet" href="styles/main.css">
+  <div data-composition-id="root" data-width="320" data-height="180"></div>
+  <script>window.__timelines = window.__timelines || {}; window.__timelines.root = {}</script>
+</body></html>`,
+      "styles/main.css": `@import url('./base/reset.css');`,
+      "styles/base/reset.css": `body { background: url('../../assets/bg.png'); }`,
+      "assets/bg.png": "fake-image",
+    });
+
+    const bundled = await bundleToSingleHtml(dir);
+
+    expect(bundled).toContain("url('assets/bg.png')");
+    expect(bundled).not.toContain("url('../../assets/bg.png')");
+  });
+
+  it("preserves absolute and data url() references during rebasing", async () => {
+    const dir = makeTempProject({
+      "index.html": `<!doctype html>
+<html><body>
+  <link rel="stylesheet" href="styles/app.css">
+  <div data-composition-id="root" data-width="320" data-height="180"></div>
+  <script>window.__timelines = window.__timelines || {}; window.__timelines.root = {}</script>
+</body></html>`,
+      "styles/app.css": [
+        `@font-face { src: url('https://cdn.example.com/font.woff2'); }`,
+        `.icon { background: url('data:image/svg+xml,<svg/>'); }`,
+        `.local { background: url('./img/bg.png'); }`,
+      ].join("\n"),
+      "styles/img/bg.png": "fake",
+    });
+
+    const bundled = await bundleToSingleHtml(dir);
+
+    expect(bundled).toContain("url('https://cdn.example.com/font.woff2')");
+    expect(bundled).toContain("url('data:image/svg+xml,<svg/>')");
+    expect(bundled).toContain("url('styles/img/bg.png')");
+  });
+
+  it("preserves url() query strings and hash fragments during rebasing", async () => {
+    const dir = makeTempProject({
+      "index.html": `<!doctype html>
+<html><body>
+  <link rel="stylesheet" href="styles/icons.css">
+  <div data-composition-id="root" data-width="320" data-height="180"></div>
+  <script>window.__timelines = window.__timelines || {}; window.__timelines.root = {}</script>
+</body></html>`,
+      "styles/icons.css": `.icon { background: url('./sprite.png?v=2#section'); }`,
+      "styles/sprite.png": "fake-sprite",
+    });
+
+    const bundled = await bundleToSingleHtml(dir);
+
+    expect(bundled).toContain("url('styles/sprite.png?v=2#section')");
+  });
 });
