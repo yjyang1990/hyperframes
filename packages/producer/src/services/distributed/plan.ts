@@ -99,7 +99,24 @@ export interface DistributedRenderConfig {
   /** Output resolution preset; engages Chrome `deviceScaleFactor` supersampling. */
   outputResolution?: CanvasResolution;
 
-  /** Default `240` frames (~8s @ 30fps; fits Lambda's 15-min cap). */
+  /**
+   * Frames per chunk. When explicitly set, that value is used and
+   * `chunkCount = min(maxParallelChunks, ceil(totalFrames / chunkSize))`
+   * — useful when the caller wants a specific per-chunk runtime
+   * regardless of fan-out. When `undefined` (the default), `plan()`
+   * auto-sizes from `maxParallelChunks` so the caller's fan-out
+   * intent is honored: `effectiveChunkSize = max(MIN_CHUNK_SIZE,
+   * ceil(totalFrames / maxParallelChunks))`. The auto-size floor
+   * (`MIN_CHUNK_SIZE = 10`) keeps per-chunk fixed overhead from
+   * swamping the parallelism gain on tiny renders.
+   *
+   * `effectiveChunkSize` also drives `LockedRenderConfig.gopSize` — every
+   * chunk's first frame is an IDR keyframe, so smaller chunks mean a
+   * tighter GOP and larger encoded files. Callers who optimize for
+   * output bytes (rather than wall-clock parallelism) should pass an
+   * explicit `chunkSize` matching their target GOP — e.g. `240` for the
+   * old 8-second-GOP behavior.
+   */
   chunkSize?: number;
   /** Default `16`. Caps long renders to fewer-but-longer chunks for operational fairness. */
   maxParallelChunks?: number;
@@ -177,10 +194,21 @@ export const PLAN_PROJECT_DIR_SKIP_SEGMENTS: ReadonlySet<string> = new Set([
   ".turbo",
 ]);
 
-/** Default chunk size in frames (~8s @ 30fps; fits Lambda's 15-min cap). */
+/**
+ * Default chunk size in frames (~8s @ 30fps; fits Lambda's 15-min cap).
+ * Used when the caller explicitly passes this value. When `chunkSize` is
+ * `undefined`, `plan()` auto-sizes from `maxParallelChunks` instead.
+ */
 export const DEFAULT_CHUNK_SIZE = 240;
 /** Default cap on parallel chunks for operational fairness across renders. */
 export const DEFAULT_MAX_PARALLEL_CHUNKS = 16;
+/**
+ * Floor for the auto-sized `chunkSize` when the caller leaves it
+ * `undefined`. Anything smaller hits a per-chunk fixed-overhead wall
+ * (worker boot + plan download + planHash recompute + ffmpeg init) that
+ * outweighs the parallelism gain on tiny renders.
+ */
+export const MIN_CHUNK_SIZE = 10;
 /**
  * Default hard ceiling on `<planDir>/` size in bytes. 2 GB fits inside
  * AWS Lambda's 10 GB `/tmp` alongside the chunk worker's captured frames
@@ -329,18 +357,26 @@ export function measurePlanDirBytes(planDir: string): number {
 
 /**
  * Compute `(chunkCount, effectiveChunkSize)` from total frames and the
- * caller's chunking knobs:
+ * caller's chunking knobs. The operative chunk size is
+ * `resolvedChunkSize` — equal to `configChunkSize` when the caller
+ * passes one, otherwise auto-sized from `maxParallelChunks`:
  *
- *     chunkCount = min(maxParallelChunks, ceil(totalFrames / chunkSize))
- *     effectiveChunkSize = max(configChunkSize, ceil(totalFrames / maxParallelChunks))
+ *     resolvedChunkSize   = configChunkSize ?? max(MIN_CHUNK_SIZE, ceil(totalFrames / maxParallelChunks))
+ *     chunkCount          = min(maxParallelChunks, ceil(totalFrames / resolvedChunkSize))
+ *     effectiveChunkSize  = max(resolvedChunkSize, ceil(totalFrames / chunkCount))
  *
  * Long renders auto-rescale to fewer-but-longer chunks rather than
  * fragmenting infinitely. Returned `chunkCount >= 1` (`totalFrames === 0`
- * is rejected upstream); `effectiveChunkSize >= configChunkSize`.
+ * is rejected upstream); `effectiveChunkSize >= resolvedChunkSize`.
+ *
+ * The auto-sizer (triggered when `configChunkSize` is `undefined`) honors
+ * the caller's fan-out intent: passing `maxParallelChunks=16` without
+ * `chunkSize` produces 16 chunks (subject to the `MIN_CHUNK_SIZE` floor
+ * on tiny renders). Explicit numbers, including `240`, take precedence.
  */
 export function resolveChunkPlan(
   totalFrames: number,
-  configChunkSize: number,
+  configChunkSize: number | undefined,
   maxParallelChunks: number,
 ): { chunkCount: number; effectiveChunkSize: number } {
   // Integer-only inputs: a fractional `totalFrames` (e.g. 10.5) would
@@ -348,11 +384,20 @@ export function resolveChunkPlan(
   // chunk worker's `for (i = startFrame; i < endFrame; i++)` loop would
   // silently truncate.
   assertPositiveInteger("totalFrames", totalFrames);
-  assertPositiveInteger("configChunkSize", configChunkSize);
   assertPositiveInteger("maxParallelChunks", maxParallelChunks);
-  const naiveCount = Math.ceil(totalFrames / configChunkSize);
+  // Validate the caller-supplied value with its real name so the error
+  // message points at the actual bad input. The auto-sized branch is
+  // provably a positive integer (totalFrames and maxParallelChunks are
+  // already validated above, MIN_CHUNK_SIZE is a positive integer
+  // constant), so it doesn't need re-checking.
+  if (configChunkSize !== undefined) {
+    assertPositiveInteger("configChunkSize", configChunkSize);
+  }
+  const resolvedChunkSize =
+    configChunkSize ?? Math.max(MIN_CHUNK_SIZE, Math.ceil(totalFrames / maxParallelChunks));
+  const naiveCount = Math.ceil(totalFrames / resolvedChunkSize);
   const chunkCount = Math.min(maxParallelChunks, Math.max(1, naiveCount));
-  const effectiveChunkSize = Math.max(configChunkSize, Math.ceil(totalFrames / chunkCount));
+  const effectiveChunkSize = Math.max(resolvedChunkSize, Math.ceil(totalFrames / chunkCount));
   return { chunkCount, effectiveChunkSize };
 }
 
@@ -745,11 +790,10 @@ export async function plan(
   }
 
   // ── Chunking decisions + locked config ──
-  const configChunkSize = config.chunkSize ?? DEFAULT_CHUNK_SIZE;
   const maxParallel = config.maxParallelChunks ?? DEFAULT_MAX_PARALLEL_CHUNKS;
   const { chunkCount, effectiveChunkSize } = resolveChunkPlan(
     totalFrames,
-    configChunkSize,
+    config.chunkSize,
     maxParallel,
   );
   const chunks = buildChunkSlices(totalFrames, chunkCount, effectiveChunkSize);
