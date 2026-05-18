@@ -181,7 +181,7 @@ describe("NLEPreview", () => {
       );
     });
 
-    expect(view.stage.style.transform).toContain("translate3d(56px, 40px, 0)");
+    expect(view.stage.style.transform).toContain("translate3d(48px, 40px, 0)");
     view.cleanup();
   });
 

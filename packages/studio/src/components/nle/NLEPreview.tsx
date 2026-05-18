@@ -173,7 +173,13 @@ export const NLEPreview = memo(function NLEPreview({
         zoomingRef.current = false;
         const final = zoomRef.current;
         writeStudioUiPreferences({ previewZoom: final });
-        setSettledZoom(final);
+        setSettledZoom((prev) =>
+          prev.zoomPercent === final.zoomPercent &&
+          prev.panX === final.panX &&
+          prev.panY === final.panY
+            ? prev
+            : final,
+        );
         if (showHud) {
           const hud = hudRef.current;
           if (hud) {
@@ -401,6 +407,7 @@ export const NLEPreview = memo(function NLEPreview({
               width: `${stageSize.width}px`,
               height: `${stageSize.height}px`,
               transform: `translate3d(${toDomPrecision(initial.panX)}px, ${toDomPrecision(initial.panY)}px, 0) scale(${toDomPrecision(initial.zoomPercent / 100)})`,
+              // resolvePreviewWheelZoom cursor math assumes center-center pivot
               transformOrigin: "center center",
             }}
             data-testid="preview-zoom-stage"

@@ -69,12 +69,30 @@ export function clampPreviewPan(input: {
   const contentWidth = input.contentWidth ?? input.viewportWidth;
   const contentHeight = input.contentHeight ?? input.viewportHeight;
   const maxPanX =
-    Math.abs(contentWidth * scale - input.viewportWidth) / 2 + PREVIEW_PAN_OVERSCROLL_PX;
+    Math.max(0, (contentWidth * scale - input.viewportWidth) / 2) + PREVIEW_PAN_OVERSCROLL_PX;
   const maxPanY =
-    Math.abs(contentHeight * scale - input.viewportHeight) / 2 + PREVIEW_PAN_OVERSCROLL_PX;
+    Math.max(0, (contentHeight * scale - input.viewportHeight) / 2) + PREVIEW_PAN_OVERSCROLL_PX;
   return {
     panX: Math.min(maxPanX, Math.max(-maxPanX, input.panX)),
     panY: Math.min(maxPanY, Math.max(-maxPanY, input.panY)),
+  };
+}
+
+function clampPreviewPanForZoom(
+  panX: number,
+  panY: number,
+  zoomPercent: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  contentWidth: number,
+  contentHeight: number,
+): Pick<PreviewZoomState, "panX" | "panY"> {
+  const scale = clampPreviewZoomPercent(zoomPercent) / 100;
+  const maxPanX = Math.abs(contentWidth * scale - viewportWidth) / 2 + PREVIEW_PAN_OVERSCROLL_PX;
+  const maxPanY = Math.abs(contentHeight * scale - viewportHeight) / 2 + PREVIEW_PAN_OVERSCROLL_PX;
+  return {
+    panX: Math.min(maxPanX, Math.max(-maxPanX, panX)),
+    panY: Math.min(maxPanY, Math.max(-maxPanY, panY)),
   };
 }
 
@@ -96,21 +114,23 @@ export function resolvePreviewWheelZoom(input: {
   let panX = input.state.panX;
   let panY = input.state.panY;
 
-  if (input.cursorX !== undefined && input.cursorY !== undefined && Math.abs(oldScale) > 1e-6) {
+  if (input.cursorX !== undefined && input.cursorY !== undefined) {
     const ratio = newScale / oldScale;
     panX = input.cursorX * (1 - ratio) + panX * ratio;
     panY = input.cursorY * (1 - ratio) + panY * ratio;
   }
 
-  const pan = clampPreviewPan({
+  const cw = input.contentWidth ?? input.viewportWidth;
+  const ch = input.contentHeight ?? input.viewportHeight;
+  const pan = clampPreviewPanForZoom(
     panX,
     panY,
-    zoomPercent: nextZoomPercent,
-    viewportWidth: input.viewportWidth,
-    viewportHeight: input.viewportHeight,
-    contentWidth: input.contentWidth,
-    contentHeight: input.contentHeight,
-  });
+    nextZoomPercent,
+    input.viewportWidth,
+    input.viewportHeight,
+    cw,
+    ch,
+  );
 
   return {
     zoomPercent: nextZoomPercent,
