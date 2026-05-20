@@ -612,15 +612,13 @@ function inlineSubCompositions(
     }
   }
 
-  if (result.externalLinkHrefs.length && head) {
-    for (const href of result.externalLinkHrefs) {
-      if (document.querySelector(`link[href="${href}"]`)) continue;
+  if (result.externalLinks.length && head) {
+    for (const link of result.externalLinks) {
+      if (document.querySelector(`link[href="${link.href}"]`)) continue;
       const el = document.createElement("link");
-      el.setAttribute(
-        "rel",
-        href.includes(".css") || href.includes("css2?") ? "stylesheet" : "preconnect",
-      );
-      el.setAttribute("href", href);
+      el.setAttribute("rel", link.rel);
+      el.setAttribute("href", link.href);
+      if (link.crossorigin != null) el.setAttribute("crossorigin", link.crossorigin);
       head.appendChild(el);
     }
   }

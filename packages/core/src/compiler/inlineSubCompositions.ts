@@ -97,7 +97,7 @@ export interface InlineSubCompositionsResult {
   styles: string[];
   scripts: string[];
   externalScriptSrcs: string[];
-  externalLinkHrefs: string[];
+  externalLinks: { href: string; rel: string; crossorigin?: string }[];
   variablesByComp: Record<string, Record<string, unknown>>;
 }
 
@@ -150,7 +150,8 @@ export function inlineSubCompositions(
   const styles: string[] = [];
   const scripts: string[] = [];
   const externalScriptSrcs: string[] = [];
-  const externalLinkHrefs: string[] = [];
+  const externalLinks: { href: string; rel: string; crossorigin?: string }[] = [];
+  const seenLinkHrefs = new Set<string>();
   const variablesByComp: Record<string, Record<string, unknown>> = {};
 
   for (const hostEl of hosts) {
@@ -227,8 +228,13 @@ export function inlineSubCompositions(
         ...compDoc.head.querySelectorAll('link[rel="stylesheet"], link[rel="preconnect"]'),
       ]) {
         const href = (link.getAttribute("href") || "").trim();
-        if (href && !externalLinkHrefs.includes(href)) {
-          externalLinkHrefs.push(href);
+        if (href && !seenLinkHrefs.has(href)) {
+          seenLinkHrefs.add(href);
+          const rel = (link.getAttribute("rel") || "").trim();
+          const crossorigin = link.hasAttribute("crossorigin")
+            ? link.getAttribute("crossorigin") || ""
+            : undefined;
+          externalLinks.push({ href, rel, crossorigin });
         }
       }
     }
@@ -335,5 +341,5 @@ export function inlineSubCompositions(
     hostEl.removeAttribute("data-composition-src");
   }
 
-  return { styles, scripts, externalScriptSrcs, externalLinkHrefs, variablesByComp };
+  return { styles, scripts, externalScriptSrcs, externalLinks, variablesByComp };
 }

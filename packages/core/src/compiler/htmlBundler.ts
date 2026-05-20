@@ -685,7 +685,7 @@ export async function bundleToSingleHtml(
   const compStyleChunks: string[] = [...subCompResult.styles];
   const compScriptChunks: string[] = [...subCompResult.scripts];
   const compExternalScriptSrcs: string[] = [...subCompResult.externalScriptSrcs];
-  const compExternalLinkHrefs: string[] = [...subCompResult.externalLinkHrefs];
+  const compExternalLinks = [...subCompResult.externalLinks];
   const compVariablesByComp: Record<string, Record<string, unknown>> = {
     ...subCompResult.variablesByComp,
   };
@@ -812,14 +812,12 @@ export async function bundleToSingleHtml(
     }
   }
 
-  for (const href of compExternalLinkHrefs) {
-    if (!document.querySelector(`link[href="${href}"]`)) {
+  for (const link of compExternalLinks) {
+    if (!document.querySelector(`link[href="${link.href}"]`)) {
       const linkEl = document.createElement("link");
-      linkEl.setAttribute(
-        "rel",
-        href.includes(".css") || href.includes("css2?") ? "stylesheet" : "preconnect",
-      );
-      linkEl.setAttribute("href", href);
+      linkEl.setAttribute("rel", link.rel);
+      linkEl.setAttribute("href", link.href);
+      if (link.crossorigin != null) linkEl.setAttribute("crossorigin", link.crossorigin);
       document.head.appendChild(linkEl);
     }
   }

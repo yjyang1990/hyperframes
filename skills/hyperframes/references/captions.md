@@ -146,6 +146,8 @@ npx hyperframes add caption-highlight         # install a specific one
 
 Browse all with previews: [hyperframes.heygen.com/catalog](https://hyperframes.heygen.com/catalog)
 
+Caption components ship with transparent backgrounds — they're pure overlays. If the underlying video is bright or busy, add a contrast layer (e.g. a semi-transparent dark div) in the host composition beneath the caption sub-composition, not inside the component itself.
+
 ## Further References
 
 - [dynamic-techniques.md](dynamic-techniques.md) — karaoke, clip-path reveals, slam words, scatter exits, elastic, 3D rotation
