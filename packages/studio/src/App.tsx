@@ -117,12 +117,9 @@ export function StudioApp() {
   });
   const editHistory = usePersistentEditHistory({ projectId });
   const domEditSaveTimestampRef = useRef(0);
+  const pendingTimelineEditPathRef = useRef<string | null>(null);
   const reloadPreview = useCallback(() => {
-    try {
-      previewIframeRef.current?.contentWindow?.location.reload();
-    } catch {
-      setRefreshKey((k) => k + 1);
-    }
+    setRefreshKey((k) => k + 1);
   }, []);
 
   const fileManager = useFileManager({
@@ -155,6 +152,7 @@ export function StudioApp() {
     activeCompPathRef,
     domEditSaveTimestampRef,
     reloadPreview: () => setRefreshKey((k) => k + 1),
+    pendingTimelineEditPathRef,
   });
 
   const timelineEditing = useTimelineEditing({
@@ -166,6 +164,8 @@ export function StudioApp() {
     recordEdit: editHistory.recordEdit,
     domEditSaveTimestampRef,
     reloadPreview,
+    previewIframeRef,
+    pendingTimelineEditPathRef,
     uploadProjectFiles: fileManager.uploadProjectFiles,
   });
 

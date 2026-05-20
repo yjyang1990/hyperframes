@@ -38,6 +38,8 @@ interface UseTimelineEditingOptions {
   recordEdit: (input: RecordEditInput) => Promise<void>;
   domEditSaveTimestampRef: React.MutableRefObject<number>;
   reloadPreview: () => void;
+  previewIframeRef: React.RefObject<HTMLIFrameElement | null>;
+  pendingTimelineEditPathRef: React.MutableRefObject<string | null>;
   uploadProjectFiles: (files: Iterable<File>, dir?: string) => Promise<string[]>;
 }
 
@@ -51,6 +53,87 @@ function buildPatchTarget(element: { domId?: string; selector?: string; selector
     return { selector: element.selector, selectorIndex: element.selectorIndex };
   }
   return null;
+}
+
+function findIframeElement(
+  iframe: HTMLIFrameElement | null,
+  element: { domId?: string; selector?: string; selectorIndex?: number },
+): Element | null {
+  const doc = iframe?.contentDocument;
+  if (!doc) return null;
+  if (element.domId) return doc.getElementById(element.domId);
+  if (!element.selector) return null;
+  return doc.querySelectorAll(element.selector)[element.selectorIndex ?? 0] ?? null;
+}
+
+const TIMING_ATTR_MAP: Record<string, string> = {
+  start: "data-start",
+  duration: "data-duration",
+  track: "data-track-index",
+};
+
+function patchIframeDomTiming(
+  iframe: HTMLIFrameElement | null,
+  element: TimelineElement,
+  updates: { start?: number; duration?: number; track?: number; playbackStart?: number },
+): void {
+  try {
+    const el = findIframeElement(iframe, element);
+    if (!el) return;
+    for (const [key, attr] of Object.entries(TIMING_ATTR_MAP)) {
+      const val = updates[key as keyof typeof updates];
+      if (val != null) el.setAttribute(attr, formatTimelineAttributeNumber(val));
+    }
+    if (updates.playbackStart != null) {
+      const attr =
+        element.playbackStartAttr === "playback-start" ? "data-playback-start" : "data-media-start";
+      el.setAttribute(attr, formatTimelineAttributeNumber(updates.playbackStart));
+    }
+  } catch {
+    // Cross-origin or mid-navigation — safe to ignore, file is already saved.
+  }
+}
+
+type PatchTarget = NonNullable<ReturnType<typeof buildPatchTarget>>;
+
+interface PersistTimelineEditInput {
+  projectId: string;
+  element: TimelineElement;
+  activeCompPath: string | null;
+  label: string;
+  buildPatches: (original: string, target: PatchTarget) => string;
+  writeProjectFile: (path: string, content: string) => Promise<void>;
+  recordEdit: (input: RecordEditInput) => Promise<void>;
+  domEditSaveTimestampRef: React.MutableRefObject<number>;
+  pendingTimelineEditPathRef: React.MutableRefObject<string | null>;
+}
+
+async function persistTimelineEdit(input: PersistTimelineEditInput): Promise<void> {
+  const targetPath = input.element.sourceFile || input.activeCompPath || "index.html";
+  const originalContent = await readFileContent(input.projectId, targetPath);
+
+  const patchTarget = buildPatchTarget(input.element);
+  if (!patchTarget) {
+    throw new Error(`Timeline element ${input.element.id} is missing a patchable target`);
+  }
+
+  const patchedContent = input.buildPatches(originalContent, patchTarget);
+  if (patchedContent === originalContent) {
+    throw new Error(`Unable to patch timeline element ${input.element.id} in ${targetPath}`);
+  }
+
+  input.pendingTimelineEditPathRef.current = targetPath;
+  input.domEditSaveTimestampRef.current = Date.now();
+  await saveProjectFilesWithHistory({
+    projectId: input.projectId,
+    label: input.label,
+    kind: "timeline",
+    files: { [targetPath]: patchedContent },
+    readFile: async () => originalContent,
+    writeFile: input.writeProjectFile,
+    recordEdit: input.recordEdit,
+  });
+  input.domEditSaveTimestampRef.current = Date.now();
 }
 
 async function readFileContent(projectId: string, targetPath: string): Promise<string> {
@@ -78,127 +161,118 @@ export function useTimelineEditing({
   recordEdit,
   domEditSaveTimestampRef,
   reloadPreview,
+  previewIframeRef,
+  pendingTimelineEditPathRef,
   uploadProjectFiles,
 }: UseTimelineEditingOptions) {
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
 
+  const editQueueRef = useRef(Promise.resolve());
   const lastBlockedTimelineToastAtRef = useRef(0);
 
-  const handleTimelineElementMove = useCallback(
-    async (element: TimelineElement, updates: Pick<TimelineElement, "start" | "track">) => {
+  const enqueueEdit = useCallback(
+    (
+      element: TimelineElement,
+      label: string,
+      buildPatches: PersistTimelineEditInput["buildPatches"],
+    ) => {
       const pid = projectIdRef.current;
-      if (!pid) throw new Error("No active project");
-
-      const targetPath = element.sourceFile || activeCompPath || "index.html";
-      const originalContent = await readFileContent(pid, targetPath);
-
-      const patchTarget = buildPatchTarget(element);
-      if (!patchTarget) {
-        throw new Error(`Timeline element ${element.id} is missing a patchable target`);
-      }
-
-      let patchedContent = applyPatchByTarget(originalContent, patchTarget, {
-        type: "attribute",
-        property: "start",
-        value: formatTimelineAttributeNumber(updates.start),
-      });
-      patchedContent = applyPatchByTarget(patchedContent, patchTarget, {
-        type: "attribute",
-        property: "track-index",
-        value: String(updates.track),
-      });
-
-      if (patchedContent === originalContent) {
-        throw new Error(`Unable to patch timeline element ${element.id} in ${targetPath}`);
-      }
-
-      domEditSaveTimestampRef.current = Date.now();
-      await saveProjectFilesWithHistory({
-        projectId: pid,
-        label: "Move timeline clip",
-        kind: "timeline",
-        files: { [targetPath]: patchedContent },
-        readFile: async () => originalContent,
-        writeFile: writeProjectFile,
-        recordEdit,
-      });
-
-      reloadPreview();
+      if (!pid) return;
+      editQueueRef.current = editQueueRef.current
+        .then(() =>
+          persistTimelineEdit({
+            projectId: pid,
+            element,
+            activeCompPath,
+            label,
+            buildPatches,
+            writeProjectFile,
+            recordEdit,
+            domEditSaveTimestampRef,
+            pendingTimelineEditPathRef,
+          }),
+        )
+        .catch((error) => {
+          console.error(`[Timeline] Failed to persist: ${label}`, error);
+        });
     },
-    [activeCompPath, recordEdit, writeProjectFile, domEditSaveTimestampRef, reloadPreview],
+    [
+      activeCompPath,
+      recordEdit,
+      writeProjectFile,
+      domEditSaveTimestampRef,
+      pendingTimelineEditPathRef,
+    ],
+  );
+
+  const handleTimelineElementMove = useCallback(
+    (element: TimelineElement, updates: Pick<TimelineElement, "start" | "track">) => {
+      patchIframeDomTiming(previewIframeRef.current, element, updates);
+      enqueueEdit(element, "Move timeline clip", (original, target) => {
+        let patched = applyPatchByTarget(original, target, {
+          type: "attribute",
+          property: "start",
+          value: formatTimelineAttributeNumber(updates.start),
+        });
+        return applyPatchByTarget(patched, target, {
+          type: "attribute",
+          property: "track-index",
+          value: String(updates.track),
+        });
+      });
+    },
+    [previewIframeRef, enqueueEdit],
   );
 
   const handleTimelineElementResize = useCallback(
-    async (
+    (
       element: TimelineElement,
       updates: Pick<TimelineElement, "start" | "duration" | "playbackStart">,
     ) => {
-      const pid = projectIdRef.current;
-      if (!pid) throw new Error("No active project");
+      patchIframeDomTiming(previewIframeRef.current, element, updates);
+      enqueueEdit(element, "Resize timeline clip", (original, target) => {
+        const playbackStartAttrName =
+          element.playbackStartAttr === "playback-start" ? "playback-start" : "media-start";
+        const currentPlaybackStartValue =
+          readAttributeByTarget(original, target, "playback-start") ??
+          readAttributeByTarget(original, target, "media-start");
+        const currentPlaybackStart =
+          currentPlaybackStartValue != null ? parseFloat(currentPlaybackStartValue) : undefined;
+        const trimDelta = updates.start - element.start;
+        const fallbackPlaybackStart =
+          updates.playbackStart == null &&
+          trimDelta !== 0 &&
+          Number.isFinite(currentPlaybackStart) &&
+          currentPlaybackStart != null
+            ? Math.max(
+                0,
+                currentPlaybackStart + trimDelta * Math.max(element.playbackRate ?? 1, 0.1),
+              )
+            : undefined;
+        const nextPlaybackStart = updates.playbackStart ?? fallbackPlaybackStart;
 
-      const targetPath = element.sourceFile || activeCompPath || "index.html";
-      const originalContent = await readFileContent(pid, targetPath);
-
-      const patchTarget = buildPatchTarget(element);
-      if (!patchTarget) {
-        throw new Error(`Timeline element ${element.id} is missing a patchable target`);
-      }
-
-      const playbackStartAttrName =
-        element.playbackStartAttr === "playback-start" ? "playback-start" : "media-start";
-      const currentPlaybackStartValue =
-        readAttributeByTarget(originalContent, patchTarget, "playback-start") ??
-        readAttributeByTarget(originalContent, patchTarget, "media-start");
-      const currentPlaybackStart =
-        currentPlaybackStartValue != null ? parseFloat(currentPlaybackStartValue) : undefined;
-      const trimDelta = updates.start - element.start;
-      const fallbackPlaybackStart =
-        updates.playbackStart == null &&
-        trimDelta !== 0 &&
-        Number.isFinite(currentPlaybackStart) &&
-        currentPlaybackStart != null
-          ? Math.max(0, currentPlaybackStart + trimDelta * Math.max(element.playbackRate ?? 1, 0.1))
-          : undefined;
-      const nextPlaybackStart = updates.playbackStart ?? fallbackPlaybackStart;
-
-      let patchedContent = originalContent;
-      patchedContent = applyPatchByTarget(patchedContent, patchTarget, {
-        type: "attribute",
-        property: "start",
-        value: formatTimelineAttributeNumber(updates.start),
-      });
-      patchedContent = applyPatchByTarget(patchedContent, patchTarget, {
-        type: "attribute",
-        property: "duration",
-        value: formatTimelineAttributeNumber(updates.duration),
-      });
-      if (nextPlaybackStart != null) {
-        patchedContent = applyPatchByTarget(patchedContent, patchTarget, {
+        let patched = applyPatchByTarget(original, target, {
           type: "attribute",
-          property: playbackStartAttrName,
-          value: formatTimelineAttributeNumber(nextPlaybackStart),
+          property: "start",
+          value: formatTimelineAttributeNumber(updates.start),
         });
-      }
-
-      if (patchedContent === originalContent) {
-        throw new Error(`Unable to patch timeline element ${element.id} in ${targetPath}`);
-      }
-
-      domEditSaveTimestampRef.current = Date.now();
-      await saveProjectFilesWithHistory({
-        projectId: pid,
-        label: "Resize timeline clip",
-        kind: "timeline",
-        files: { [targetPath]: patchedContent },
-        readFile: async () => originalContent,
-        writeFile: writeProjectFile,
-        recordEdit,
+        patched = applyPatchByTarget(patched, target, {
+          type: "attribute",
+          property: "duration",
+          value: formatTimelineAttributeNumber(updates.duration),
+        });
+        if (nextPlaybackStart != null) {
+          patched = applyPatchByTarget(patched, target, {
+            type: "attribute",
+            property: playbackStartAttrName,
+            value: formatTimelineAttributeNumber(nextPlaybackStart),
+          });
+        }
+        return patched;
       });
-
-      reloadPreview();
     },
-    [activeCompPath, recordEdit, writeProjectFile, domEditSaveTimestampRef, reloadPreview],
+    [previewIframeRef, enqueueEdit],
   );
 
   const handleTimelineElementDelete = useCallback(

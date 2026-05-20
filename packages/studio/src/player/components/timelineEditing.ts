@@ -237,8 +237,8 @@ export function getTimelineEditCapabilities(input: {
   const hasDeterministicWindow = isDeterministicTimelineWindow(input);
   return {
     canMove: canPatch && (hasDeterministicWindow || hasFiniteDuration),
-    canTrimEnd: canPatch && hasFiniteDuration && hasDeterministicWindow,
-    canTrimStart: canPatch && hasFiniteDuration && canOffsetTrimClipStart(input),
+    canTrimEnd: canPatch && hasFiniteDuration,
+    canTrimStart: canPatch && hasFiniteDuration,
   };
 }
 

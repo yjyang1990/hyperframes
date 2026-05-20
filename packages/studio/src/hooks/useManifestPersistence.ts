@@ -26,8 +26,11 @@ interface UseManifestPersistenceParams {
   previewIframeRef: React.MutableRefObject<HTMLIFrameElement | null>;
   activeCompPathRef: React.MutableRefObject<string | null>;
   /** Shared timestamp ref — written by any studio save (code tab, timeline, DOM edits).
-   *  Used to suppress SSE echoes so we don't double-reload after our own saves. */
+   *  Used to suppress file-change echoes so we don't reload after our own saves. */
   domEditSaveTimestampRef: React.MutableRefObject<number>;
+  /** Tracks in-flight timeline edits that patch the iframe DOM directly. File-change
+   *  events for these paths are always suppressed since the preview is already up-to-date. */
+  pendingTimelineEditPathRef?: React.MutableRefObject<string | null>;
   /** Called to reload the preview after undo/redo or external file changes. */
   reloadPreview: () => void;
 }
@@ -44,6 +47,7 @@ export function useManifestPersistence({
   activeCompPathRef: _activeCompPathRef,
   domEditSaveTimestampRef,
   reloadPreview,
+  pendingTimelineEditPathRef,
 }: UseManifestPersistenceParams) {
   void _showToast;
   void _recordEdit;
@@ -162,8 +166,12 @@ export function useManifestPersistence({
     const handler = (payload?: unknown) => {
       const changedPath = readStudioFileChangePath(payload);
       if (!changedPath) return;
-      const recentDomEditSave = Date.now() - domEditSaveTimestampRef.current < 1200;
-      // External file change — reload unless it's an echo of our own save.
+      const recentDomEditSave = Date.now() - domEditSaveTimestampRef.current < 4000;
+      const pendingPath = pendingTimelineEditPathRef?.current;
+      if (pendingPath && changedPath.endsWith(pendingPath)) {
+        pendingTimelineEditPathRef!.current = null;
+        return;
+      }
       if (!recentDomEditSave) {
         reloadPreview();
       }
