@@ -117,7 +117,7 @@ export function StudioApp() {
   });
   const editHistory = usePersistentEditHistory({ projectId });
   const domEditSaveTimestampRef = useRef(0);
-  const pendingTimelineEditPathRef = useRef<string | null>(null);
+  const pendingTimelineEditPathRef = useRef(new Set<string>());
   const reloadPreview = useCallback(() => {
     setRefreshKey((k) => k + 1);
   }, []);

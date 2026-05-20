@@ -39,7 +39,7 @@ interface UseTimelineEditingOptions {
   domEditSaveTimestampRef: React.MutableRefObject<number>;
   reloadPreview: () => void;
   previewIframeRef: React.RefObject<HTMLIFrameElement | null>;
-  pendingTimelineEditPathRef: React.MutableRefObject<string | null>;
+  pendingTimelineEditPathRef: React.MutableRefObject<Set<string>>;
   uploadProjectFiles: (files: Iterable<File>, dir?: string) => Promise<string[]>;
 }
 
@@ -55,6 +55,9 @@ function buildPatchTarget(element: { domId?: string; selector?: string; selector
   return null;
 }
 
+// The runtime re-reads data-start/data-duration from the DOM on each sync tick
+// (packages/core/src/runtime/init.ts:1324-1368), so attribute mutations here are
+// picked up automatically on the next frame without a rebind call.
 function patchIframeDomTiming(
   iframe: HTMLIFrameElement | null,
   element: TimelineElement,
@@ -71,7 +74,7 @@ function patchIframeDomTiming(
     if (!el) return;
     for (const [name, value] of attrs) el.setAttribute(name, value);
   } catch {
-    // Cross-origin or mid-navigation — safe to ignore, file is already saved.
+    // Cross-origin or mid-navigation — file save is enqueued; iframe patch is best-effort.
   }
 }
 
@@ -112,7 +115,7 @@ interface PersistTimelineEditInput {
   writeProjectFile: (path: string, content: string) => Promise<void>;
   recordEdit: (input: RecordEditInput) => Promise<void>;
   domEditSaveTimestampRef: React.MutableRefObject<number>;
-  pendingTimelineEditPathRef: React.MutableRefObject<string | null>;
+  pendingTimelineEditPathRef: React.MutableRefObject<Set<string>>;
 }
 
 async function persistTimelineEdit(input: PersistTimelineEditInput): Promise<void> {
@@ -129,7 +132,7 @@ async function persistTimelineEdit(input: PersistTimelineEditInput): Promise<voi
     throw new Error(`Unable to patch timeline element ${input.element.id} in ${targetPath}`);
   }
 
-  input.pendingTimelineEditPathRef.current = targetPath;
+  input.pendingTimelineEditPathRef.current.add(targetPath);
   input.domEditSaveTimestampRef.current = Date.now();
   await saveProjectFilesWithHistory({
     projectId: input.projectId,
@@ -183,26 +186,26 @@ export function useTimelineEditing({
       element: TimelineElement,
       label: string,
       buildPatches: PersistTimelineEditInput["buildPatches"],
-    ) => {
+    ): Promise<void> => {
       const pid = projectIdRef.current;
-      if (!pid) return;
-      editQueueRef.current = editQueueRef.current
-        .then(() =>
-          persistTimelineEdit({
-            projectId: pid,
-            element,
-            activeCompPath,
-            label,
-            buildPatches,
-            writeProjectFile,
-            recordEdit,
-            domEditSaveTimestampRef,
-            pendingTimelineEditPathRef,
-          }),
-        )
-        .catch((error) => {
-          console.error(`[Timeline] Failed to persist: ${label}`, error);
-        });
+      if (!pid) return Promise.resolve();
+      const queued = editQueueRef.current.then(() =>
+        persistTimelineEdit({
+          projectId: pid,
+          element,
+          activeCompPath,
+          label,
+          buildPatches,
+          writeProjectFile,
+          recordEdit,
+          domEditSaveTimestampRef,
+          pendingTimelineEditPathRef,
+        }),
+      );
+      editQueueRef.current = queued.catch((error) => {
+        console.error(`[Timeline] Failed to persist: ${label}`, error);
+      });
+      return queued;
     },
     [
       activeCompPath,
@@ -219,7 +222,7 @@ export function useTimelineEditing({
         ["data-start", formatTimelineAttributeNumber(updates.start)],
         ["data-track-index", String(updates.track)],
       ]);
-      enqueueEdit(element, "Move timeline clip", (original, target) => {
+      return enqueueEdit(element, "Move timeline clip", (original, target) => {
         let patched = applyPatchByTarget(original, target, {
           type: "attribute",
           property: "start",
@@ -244,7 +247,7 @@ export function useTimelineEditing({
         ["data-start", formatTimelineAttributeNumber(updates.start)],
         ["data-duration", formatTimelineAttributeNumber(updates.duration)],
       ]);
-      enqueueEdit(element, "Resize timeline clip", (original, target) => {
+      return enqueueEdit(element, "Resize timeline clip", (original, target) => {
         const pbs = resolveResizePlaybackStart(original, target, element, updates);
         let patched = applyPatchByTarget(original, target, {
           type: "attribute",

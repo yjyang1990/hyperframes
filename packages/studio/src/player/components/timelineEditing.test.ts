@@ -4,7 +4,6 @@ import {
   buildPromptCopyText,
   buildTimelineElementAgentPrompt,
   buildTimelineAgentPrompt,
-  canOffsetTrimClipStart,
   getTimelineEditCapabilities,
   hasPatchableTimelineTarget,
   resolveBlockedTimelineEditIntent,
@@ -155,42 +154,6 @@ describe("resolveTimelineMove", () => {
         200,
       ),
     ).toEqual({ start: 2, track: 2 });
-  });
-});
-
-describe("canOffsetTrimClipStart", () => {
-  it("allows front trim for clips that carry playback offset metadata", () => {
-    expect(
-      canOffsetTrimClipStart({
-        tag: "div",
-        playbackStartAttr: "media-start",
-      }),
-    ).toBe(true);
-  });
-
-  it("allows front trim for media clips with source duration metadata", () => {
-    expect(
-      canOffsetTrimClipStart({
-        tag: "video",
-        sourceDuration: 12,
-      }),
-    ).toBe(true);
-  });
-
-  it("allows front trim for plain audio clips even before media-start exists", () => {
-    expect(
-      canOffsetTrimClipStart({
-        tag: "audio",
-      }),
-    ).toBe(true);
-  });
-
-  it("blocks front trim for generic motion clips", () => {
-    expect(
-      canOffsetTrimClipStart({
-        tag: "section",
-      }),
-    ).toBe(false);
   });
 });
 

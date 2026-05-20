@@ -122,13 +122,14 @@ export function useTimelinePlayer() {
           needsProbe.map(async (el) => {
             const result = await probeMediaUrl(el.src!);
             if (!result) return;
-            const current = usePlayerStore.getState().elements;
             const key = el.key ?? el.id;
-            const idx = current.findIndex((e) => (e.key ?? e.id) === key);
-            if (idx === -1 || current[idx].sourceDuration != null) return;
-            const patched = current.slice();
-            patched[idx] = { ...current[idx], sourceDuration: result.duration };
-            setElements(patched);
+            usePlayerStore.setState((state) => {
+              const idx = state.elements.findIndex((e) => (e.key ?? e.id) === key);
+              if (idx === -1 || state.elements[idx].sourceDuration != null) return {};
+              const patched = state.elements.slice();
+              patched[idx] = { ...state.elements[idx], sourceDuration: result.duration };
+              return { elements: patched };
+            });
           }),
         );
       }

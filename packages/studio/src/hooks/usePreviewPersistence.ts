@@ -30,7 +30,7 @@ interface UsePreviewPersistenceParams {
   domEditSaveTimestampRef: React.MutableRefObject<number>;
   /** Tracks in-flight timeline edits that patch the iframe DOM directly. File-change
    *  events for these paths are always suppressed since the preview is already up-to-date. */
-  pendingTimelineEditPathRef?: React.MutableRefObject<string | null>;
+  pendingTimelineEditPathRef?: React.MutableRefObject<Set<string>>;
   /** Called to reload the preview after undo/redo or external file changes. */
   reloadPreview: () => void;
 }
@@ -167,9 +167,8 @@ export function usePreviewPersistence({
       const changedPath = readStudioFileChangePath(payload);
       if (!changedPath) return;
       const recentDomEditSave = Date.now() - domEditSaveTimestampRef.current < 4000;
-      const pendingPath = pendingTimelineEditPathRef?.current;
-      if (pendingPath && changedPath.endsWith(pendingPath)) {
-        pendingTimelineEditPathRef!.current = null;
+      if (pendingTimelineEditPathRef?.current.has(changedPath)) {
+        pendingTimelineEditPathRef.current.delete(changedPath);
         return;
       }
       if (!recentDomEditSave) {
