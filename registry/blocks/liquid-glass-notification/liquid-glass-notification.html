@@ -186,8 +186,7 @@
 
   lg.waitForInit().then(function (ok) {
     if (!ok) return;
-    glassCanvas.onpaint = function () { renderFrame(0); };
-    if (glassCanvas.requestPaint) glassCanvas.requestPaint();
+    renderFrame(0);
   });
 
   window.__timelines = window.__timelines || {};

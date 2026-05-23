@@ -484,6 +484,7 @@ export interface BuildChromeArgsOptions {
 }
 
 const CANVAS_DRAW_ELEMENT_FEATURE_FLAG = "--enable-features=CanvasDrawElement";
+const WEBGPU_FLAG = "--enable-unsafe-webgpu";
 
 export function buildChromeArgs(
   options: BuildChromeArgsOptions,
@@ -503,6 +504,7 @@ export function buildChromeArgs(
     "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
     CANVAS_DRAW_ELEMENT_FEATURE_FLAG,
+    WEBGPU_FLAG,
     "--enable-webgl",
     "--ignore-gpu-blocklist",
     ...getBrowserGpuArgs(browserGpuMode, platform),
