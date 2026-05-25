@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:net";
+import { resolve } from "node:path";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { PORT_PROBE_HOSTS, detectHyperframesServer, testPortOnAllHosts } from "./portUtils.js";
 
@@ -132,7 +133,8 @@ describe("detectHyperframesServer", () => {
       version: "0.6.42",
     });
 
-    const result = await detectHyperframesServer(port, projectDir, "new-build");
+    const normalizedProjectDir = resolve(projectDir).replace(/\\/g, "/").toLowerCase();
+    const result = await detectHyperframesServer(port, normalizedProjectDir, "new-build");
 
     expect(result).toEqual({ type: "mismatch", projectName: "demo-project" });
   });
@@ -147,7 +149,8 @@ describe("detectHyperframesServer", () => {
       version: "0.6.42",
     });
 
-    const result = await detectHyperframesServer(port, projectDir, "same-build");
+    const normalizedProjectDir = resolve(projectDir).replace(/\\/g, "/").toLowerCase();
+    const result = await detectHyperframesServer(port, normalizedProjectDir, "same-build");
 
     expect(result).toEqual({ type: "match" });
   });
