@@ -10,7 +10,11 @@ import { streamSSE } from "hono/streaming";
 import { existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { resolve, join, basename } from "node:path";
 import { createProjectWatcher, type ProjectWatcher } from "./fileWatcher.js";
-import { loadRuntimeSource } from "./runtimeSource.js";
+import {
+  hashSignatureParts,
+  loadRuntimeSource,
+  loadRuntimeSourceSignature,
+} from "./runtimeSource.js";
 import { VERSION as version } from "../version.js";
 import { emitStudioRenderComplete, emitStudioRenderError } from "./studioRenderTelemetry.js";
 import {
@@ -182,6 +186,25 @@ export interface StudioServerOptions {
 export interface StudioServer {
   app: Hono;
   watcher: ProjectWatcher;
+}
+
+export async function loadPreviewServerBuildSignature(): Promise<string> {
+  const runtimeSignature = await loadRuntimeSourceSignature();
+  const studioBundle = resolveStudioBundle();
+  const studioIndex =
+    studioBundle.available && existsSync(studioBundle.indexPath)
+      ? readFileSync(studioBundle.indexPath, "utf-8")
+      : "";
+  return hashSignatureParts([
+    version,
+    runtimeSignature,
+    studioIndex,
+    createStudioServer.toString(),
+    createStudioApi.toString(),
+    createProjectSignature.toString(),
+    getMimeType.toString(),
+    getElementScreenshotClip.toString(),
+  ]);
 }
 
 export function createStudioServer(options: StudioServerOptions): StudioServer {
@@ -445,12 +468,17 @@ export function createStudioServer(options: StudioServerOptions): StudioServer {
   // HyperFrames instances and reuse them instead of spawning duplicates.
   // See portUtils.ts detectHyperframesServer() for the consumer.
   app.get("/__hyperframes_config", (c) => {
-    return c.json({
-      isHyperframes: true,
-      projectName: projectId,
-      projectDir: projectDir,
-      version,
-    });
+    const serve = async () => {
+      const serverBuildSignature = await loadPreviewServerBuildSignature();
+      return c.json({
+        isHyperframes: true,
+        projectName: projectId,
+        projectDir: projectDir,
+        serverBuildSignature,
+        version,
+      });
+    };
+    return serve();
   });
 
   // CLI-specific routes (before shared API)

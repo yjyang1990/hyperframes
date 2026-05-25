@@ -398,7 +398,8 @@ async function runEmbeddedMode(
     userDataDir?: string;
   },
 ): Promise<void> {
-  const { createStudioServer, resolveStudioBundle } = await import("../server/studioServer.js");
+  const { createStudioServer, loadPreviewServerBuildSignature, resolveStudioBundle } =
+    await import("../server/studioServer.js");
 
   const pName = options?.projectName ?? basename(dir);
   const studioBundle = resolveStudioBundle();
@@ -422,10 +423,17 @@ async function runEmbeddedMode(
   }
 
   const { app } = createStudioServer({ projectDir: dir, projectName: pName });
+  const serverBuildSignature = await loadPreviewServerBuildSignature();
 
   let result: FindPortResult;
   try {
-    result = await findPortAndServe(app.fetch, startPort, dir, !!options?.forceNew);
+    result = await findPortAndServe(
+      app.fetch,
+      startPort,
+      dir,
+      !!options?.forceNew,
+      serverBuildSignature,
+    );
   } catch (err: unknown) {
     s.stop(c.error("Failed to start studio"));
     console.error();
